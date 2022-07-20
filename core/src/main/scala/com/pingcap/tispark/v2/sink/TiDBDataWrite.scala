@@ -16,12 +16,25 @@
 
 package com.pingcap.tispark.v2.sink
 
-import com.pingcap.tikv.TiConfiguration
-import com.pingcap.tispark.write.TiDBOptions
-import org.apache.spark.sql.Row
+import com.pingcap.tikv.exception.TiBatchWriteException
+import com.pingcap.tikv.meta.{TiDBInfo, TiTableInfo, TiTimestamp}
+import com.pingcap.tikv.{StoreVersion, TTLManager, TiConfiguration, TiDBJDBCClient, TiSession}
+import com.pingcap.tispark.write.{SerializableKey, TiBatchWriteV2, TiDBOptions}
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.{
+  DataFrame,
+  Row,
+  SQLContext,
+  SaveMode,
+  SparkSession,
+  TiContext,
+  TiExtensions
+}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
 import org.apache.spark.sql.types.StructType
+
+import scala.collection.mutable.ListBuffer
 
 /**
  * Use V1WriteBuilder before turn to v2
@@ -30,20 +43,44 @@ case class TiDBDataWrite(
     partitionId: Int,
     taskId: Long,
     schema: StructType,
-    tiDBOptions: TiDBOptions,
-    ticonf: TiConfiguration)
+    options: TiDBOptions,
+    ticonf: TiConfiguration,
+    startTs: TiTimestamp,
+    dbInfo: TiDBInfo,
+    tiTableInfo: TiTableInfo,
+    supportUpdateTTL: Boolean,
+    isTiDBv4: Boolean)
     extends DataWriter[InternalRow] {
-
+  var rows: ListBuffer[Row] = ListBuffer()
   override def write(record: InternalRow): Unit = {
-    val row = Row.fromSeq(record.toSeq(schema))
-    ???
+    rows.append(Row.fromSeq(record.toSeq(schema)))
+    println(
+      "partition " + partitionId + " task " + taskId + " " + Row.fromSeq(record.toSeq(schema)))
   }
 
-  override def commit(): WriterCommitMessage = ???
+  override def commit(): WriterCommitMessage = {
+//    WriteSucceeded(null, -1, rows)
+    if (rows.isEmpty) {
+      WriteSucceeded(null, -1, null)
+    } else {
+      val primaryKey = TiBatchWriteV2.preWrite(
+        rows,
+        schema,
+        options,
+        ticonf,
+        startTs,
+        dbInfo,
+        tiTableInfo,
+        supportUpdateTTL,
+        isTiDBv4)
+      WriteSucceeded(primaryKey, partitionId, null)
+    }
+  }
 
   override def abort(): Unit = {}
 
   override def close(): Unit = {}
 }
 
-object WriteSucceeded extends WriterCommitMessage
+case class WriteSucceeded(primaryKey: SerializableKey, id: Long, rows: ListBuffer[Row])
+    extends WriterCommitMessage {}

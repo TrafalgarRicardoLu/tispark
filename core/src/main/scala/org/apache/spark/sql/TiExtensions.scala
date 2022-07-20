@@ -24,6 +24,7 @@ import org.apache.spark.sql.catalyst.analyzer.{TiAuthRuleFactory, TiAuthorizatio
 import org.apache.spark.sql.catalyst.catalog.TiCatalog
 import org.apache.spark.sql.catalyst.parser.TiParserFactory
 import org.apache.spark.sql.catalyst.planner.TiStrategyFactory
+import org.apache.spark.sql.execution.datasources.v2.TiV2Writes
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable
@@ -38,6 +39,7 @@ class TiExtensions extends (SparkSessionExtensions => Unit) {
     e.injectResolutionRule(new TiAuthRuleFactory(getOrCreateTiContext))
     e.injectPlannerStrategy(new TiStrategyFactory(getOrCreateTiContext))
     e.injectCheckRule(TelemetryRule)
+    e.injectPreCBORule(_ => TiV2Writes)
   }
 
   // call from pyspark only

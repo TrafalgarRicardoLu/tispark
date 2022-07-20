@@ -30,8 +30,10 @@ import com.pingcap.tispark.write.TiBatchWrite.{SparkRow, TiRow}
 import com.pingcap.tispark.write.{SerializableKey, WrappedEncodedRow, WrappedRow}
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
+import org.apache.spark.unsafe.types.UTF8String
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable.ListBuffer
 
 object WriteUtil {
 
@@ -53,11 +55,16 @@ object WriteUtil {
     val tiRow = ObjectRowImpl.create(fieldCount)
     for (i <- 0 until fieldCount) {
       // TODO: add tiDataType back
+      var value = sparkRow(i)
+      if (sparkRow(i).isInstanceOf[UTF8String]) {
+        value = sparkRow(i).toString
+        //        value = new String(sparkRow(i).toString.getBytes("UTF-8"), "UTF-8")
+      }
       try {
         tiRow.set(
           colsMapInTiDB(colsInDf(i)).getOffset,
           null,
-          colsMapInTiDB(colsInDf(i)).getType.convertToTiDBType(sparkRow(i)))
+          colsMapInTiDB(colsInDf(i)).getType.convertToTiDBType(value))
       } catch {
         case e: ConvertOverflowException =>
           throw new ConvertOverflowException(
@@ -157,6 +164,18 @@ object WriteUtil {
       }
     }.toMap
   }
+  def generateIndexKVs(
+      rows: ListBuffer[WrappedRow],
+      tiTableInfo: TiTableInfo,
+      remove: Boolean): Map[Long, ListBuffer[WrappedEncodedRow]] = {
+    tiTableInfo.getIndices.asScala.flatMap { index =>
+      if (tiTableInfo.isCommonHandle && index.isPrimary) {
+        None
+      } else {
+        Some((index.getId, generateIndexRDD(rows, index, tiTableInfo, remove)))
+      }
+    }.toMap
+  }
 
   /**
    * mix the results that are produced by method generateIndexKVs
@@ -183,6 +202,40 @@ object WriteUtil {
       index: TiIndexInfo,
       tiTableInfo: TiTableInfo,
       remove: Boolean): RDD[WrappedEncodedRow] = {
+    if (index.isUnique) {
+      rdd.map { row =>
+        val (encodedKey, encodedValue) =
+          generateUniqueIndexKey(row.row, row.handle, index, tiTableInfo, remove)
+        WrappedEncodedRow(
+          row.row,
+          row.handle,
+          encodedKey,
+          encodedValue,
+          isIndex = true,
+          index.getId,
+          remove)
+      }
+    } else {
+      rdd.map { row =>
+        val (encodedKey, encodedValue) =
+          generateSecondaryIndexKey(row.row, row.handle, index, tiTableInfo, remove)
+        WrappedEncodedRow(
+          row.row,
+          row.handle,
+          encodedKey,
+          encodedValue,
+          isIndex = true,
+          index.getId,
+          remove)
+      }
+    }
+  }
+
+  private def generateIndexRDD(
+      rdd: ListBuffer[WrappedRow],
+      index: TiIndexInfo,
+      tiTableInfo: TiTableInfo,
+      remove: Boolean): ListBuffer[WrappedEncodedRow] = {
     if (index.isUnique) {
       rdd.map { row =>
         val (encodedKey, encodedValue) =
@@ -290,4 +343,12 @@ object WriteUtil {
   def locatePhysicalTable(row: TiRow, tiTableInfo: TiTableInfo): Long = {
     tiTableInfo.getId
   }
+
+//  def convertSparkTypeToJava(value :Object): String = {
+//    if(value.isInstanceOf[UTF8String]) {
+//      value.toString
+//    }else{
+//      value
+//    }
+//  }
 }

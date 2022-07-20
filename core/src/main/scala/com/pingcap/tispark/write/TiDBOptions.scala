@@ -29,7 +29,7 @@ import scala.collection.mutable.ListBuffer
 /**
  * Options for the TiDB data source.
  */
-class TiDBOptions(@transient val parameters: CaseInsensitiveMap[String]) extends Serializable {
+class TiDBOptions(val parameters: CaseInsensitiveMap[String]) extends Serializable {
 
   import com.pingcap.tispark.write.TiDBOptions._
 

@@ -16,12 +16,54 @@
 
 package com.pingcap.tispark.v2.sink
 
+import com.pingcap.tikv.TiConfiguration
 import com.pingcap.tispark.write.TiDBOptions
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
-
+import org.apache.spark.sql.{DistributedWrite, TiContext}
+import org.apache.spark.sql.connector.write.{BatchWrite, LogicalWriteInfo, Write, WriteBuilder}
+import org.apache.spark.sql.types.StructType
 case class TiDBWriteBuilder(
     info: LogicalWriteInfo,
     tiDBOptions: TiDBOptions,
-    sqlContext: SQLContext)
-    extends WriteBuilder {}
+    ticontext: TiContext,
+    schema: StructType,
+    ticonf: TiConfiguration)
+    extends WriteBuilder {
+  override def build(): Write = {
+//    val tiTableRef = tiDBOptions.getTiTableRef(ticonf)
+//    val dbInfo = ticontext.tiSession.getCatalog.getDatabase(tiTableRef.databaseName)
+//    val tiTableInfo = ticontext.tiSession.getCatalog.getTable(tiTableRef.databaseName, tiTableRef.tableName)
+//
+//    var colName =""
+//    if(tiTableInfo.hasPrimaryKey){
+//      colName=tiTableInfo.getPrimaryKey.getName
+//    }else if(tiTableInfo.isPkHandle){
+//      colName=tiTableInfo.getPKIsHandleColumn.getName
+//    }else{
+//      val uniqueIndices = tiTableInfo.getIndices
+//
+//    }
+    val numPartition = ticonf.getPartitionPerSplit
+    new DistributedWrite(numPartition) {
+      override def toBatch: BatchWrite = {
+        TiDBBatchWrite(info, tiDBOptions, ticonf, ticontext.sparkSession, ticontext)
+      }
+    }
+  }
+}
+//  override def build(): V1Write =
+//    new V1Write {
+//      override def toInsertableRelation: InsertableRelation = {
+//        new InsertableRelation {
+//          override def insert(data: DataFrame, overwrite: Boolean): Unit = {
+//            val df = sqlContext.sparkSession.createDataFrame(data.toJavaRDD, schema)
+//            df.write
+//              .format("tidb")
+//              .options(tiDBOptions.parameters)
+//              .option("database", tiDBOptions.database)
+//              .option("table", tiDBOptions.table)
+//              .mode("append")
+//              .save()
+//          }
+//        }
+//      }
+//    }

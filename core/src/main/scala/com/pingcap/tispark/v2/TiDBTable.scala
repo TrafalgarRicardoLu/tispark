@@ -61,7 +61,7 @@ import org.apache.spark.sql.sources.{
 import org.apache.spark.sql.tispark.{TiHandleRDD, TiRowRDD}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import org.apache.spark.sql.{SQLContext, execution}
+import org.apache.spark.sql.{SQLContext, TiExtensions, execution}
 import org.slf4j.LoggerFactory
 
 import java.sql.{Date, SQLException, Timestamp}
@@ -70,7 +70,6 @@ import java.util
 import java.util.Collections
 import scala.collection.mutable.ListBuffer
 import collection.JavaConverters._
-
 case class TiDBTable(
     session: TiSession,
     tableRef: TiTableReference,
@@ -129,6 +128,7 @@ case class TiDBTable(
   override def capabilities(): util.Set[TableCapability] = {
     val capabilities = new util.HashSet[TableCapability]
     capabilities.add(TableCapability.BATCH_READ)
+    capabilities.add(TableCapability.BATCH_WRITE)
     capabilities
   }
 
@@ -144,21 +144,27 @@ case class TiDBTable(
 
   override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder = {
     var scalaMap = info.options().asScala.toMap
-    // TODO https://github.com/pingcap/tispark/issues/2269 we need to move TiDB dependencies which will block insert SQL.
-    // if we don't support it before release, insert SQL should throw exception in catalyst
+    println(scalaMap)
+
+    // for insert SQL
     if (scalaMap.isEmpty) {
-      throw new TiBatchWriteException("tidbOption is neccessary.")
+      scalaMap += ("tidb.addr" -> "127.0.0.1")
+      scalaMap += ("tidb.port" -> "4000")
+      scalaMap += ("tidb.user" -> "root")
+      scalaMap += ("tidb.password" -> "")
     }
-    // Support df.writeto: need add db and table for write
+
     if (!scalaMap.contains("database")) {
       scalaMap += ("database" -> databaseName)
     }
     if (!scalaMap.contains("table")) {
       scalaMap += ("table" -> tableName)
     }
-    // Get TiDBOptions
-    val tiDBOptions = new TiDBOptions(scalaMap)
-    TiDBWriteBuilder(info, tiDBOptions, sqlContext)
+
+    val tidbOptions = new TiDBOptions(scalaMap)
+
+    val ticontext = TiExtensions.getTiContext(sqlContext.sparkSession)
+    TiDBWriteBuilder(info, tidbOptions, ticontext.get, schema, session.getConf)
   }
 
   override def deleteWhere(filters: Array[Filter]): Unit = {

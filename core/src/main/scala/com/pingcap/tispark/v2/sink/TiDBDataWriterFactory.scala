@@ -16,11 +16,15 @@
 
 package com.pingcap.tispark.v2.sink
 
-import com.pingcap.tikv.TiConfiguration
+import com.pingcap.tikv.{PDClient, TiConfiguration}
+import com.pingcap.tikv.meta.{TiDBInfo, TiTableInfo, TiTimestamp}
+import com.pingcap.tikv.util.ConcreteBackOffer
 import com.pingcap.tispark.write.TiDBOptions
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.write.{DataWriter, DataWriterFactory}
 import org.apache.spark.sql.types.StructType
+
+import scala.collection.mutable.ListBuffer
 
 /**
  * Use V1WriteBuilder before turn to v2
@@ -28,9 +32,25 @@ import org.apache.spark.sql.types.StructType
 case class TiDBDataWriterFactory(
     schema: StructType,
     tiDBOptions: TiDBOptions,
-    ticonf: TiConfiguration)
+    ticonf: TiConfiguration,
+    startTs: ListBuffer[TiTimestamp],
+    dbInfo: TiDBInfo,
+    tiTableInfo: TiTableInfo,
+    supportUpdateTTL: Boolean,
+    isTiDBv4: Boolean)
     extends DataWriterFactory {
 
-  override def createWriter(partitionId: Int, taskId: Long): DataWriter[InternalRow] =
-    TiDBDataWrite(partitionId, taskId, schema, tiDBOptions, ticonf)
+  override def createWriter(partitionId: Int, taskId: Long): DataWriter[InternalRow] = {
+    TiDBDataWrite(
+      partitionId,
+      taskId,
+      schema,
+      tiDBOptions,
+      ticonf,
+      startTs.apply(partitionId),
+      dbInfo,
+      tiTableInfo,
+      supportUpdateTTL,
+      isTiDBv4)
+  }
 }

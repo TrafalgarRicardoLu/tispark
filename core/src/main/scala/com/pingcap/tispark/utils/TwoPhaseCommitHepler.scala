@@ -116,6 +116,41 @@ case class TwoPhaseCommitHepler(startTs: Long, options: TiDBOptions) extends Aut
     logger.info("prewriteSecondaryKeys success")
   }
 
+  def prewriteSecondaryKeyByExecutorsForRow(
+      secondaryKeysRDD: List[(SerializableKey, Array[Byte])],
+      primaryKey: SerializableKey): Unit = {
+    logger.info("start to prewriteSecondaryKeys")
+
+    val ti2PCClientOnExecutor =
+      new TwoPhaseCommitter(
+        tiConf,
+        startTs,
+        lockTTLSeconds * 1000,
+        options.txnPrewriteBatchSize,
+        options.txnCommitBatchSize,
+        options.writeBufferSize,
+        options.writeThreadPerTask,
+        options.retryCommitSecondaryKey,
+        options.prewriteMaxRetryTimes)
+
+    val pairs = secondaryKeysRDD.iterator
+      .map(keyValue => new BytePairWrapper(keyValue._1.bytes, keyValue._2))
+      .asJava
+
+    ti2PCClientOnExecutor.prewriteSecondaryKeys(
+      primaryKey.bytes,
+      pairs,
+      options.prewriteBackOfferMS)
+
+    try {
+      ti2PCClientOnExecutor.close()
+    } catch {
+      case _: Throwable =>
+    }
+
+    logger.info("prewriteSecondaryKeys success")
+  }
+
   // Driver primary commit
   def commitPrimaryKeyWithRetryByDriver(
       primaryKey: SerializableKey,
@@ -144,6 +179,17 @@ case class TwoPhaseCommitHepler(startTs: Long, options: TiDBOptions) extends Aut
       startTs: Long,
       primaryKey: SerializableKey,
       schemaUpdateTimes: List[SchemaUpdateTime]): Long = {
+
+    ti2PCClient = new TwoPhaseCommitter(
+      tiConf,
+      startTs,
+      lockTTLSeconds * 1000 + TTLManager.calculateUptime(tiSession.createTxnClient(), startTs),
+      options.txnPrewriteBatchSize,
+      options.txnCommitBatchSize,
+      options.writeBufferSize,
+      options.writeThreadPerTask,
+      options.retryCommitSecondaryKey,
+      options.prewriteMaxRetryTimes)
 
     // for test
     if (options.sleepAfterPrewriteSecondaryKey > 0) {
@@ -230,6 +276,44 @@ case class TwoPhaseCommitHepler(startTs: Long, options: TiDBOptions) extends Aut
     }
   }
 
+  def commitSecondaryKeyByExecutorsL(
+      secondaryKeysRDD: List[(SerializableKey, Array[Byte])],
+      commitTs: Long): Unit = {
+    if (!options.skipCommitSecondaryKey) {
+      logger.info("start to commitSecondaryKeys")
+      val ti2PCClientOnExecutor = new TwoPhaseCommitter(
+        tiConf,
+        startTs,
+        lockTTLSeconds * 1000,
+        options.txnPrewriteBatchSize,
+        options.txnCommitBatchSize,
+        options.writeBufferSize,
+        options.writeThreadPerTask,
+        options.retryCommitSecondaryKey,
+        options.prewriteMaxRetryTimes)
+
+      val keys = secondaryKeysRDD.iterator.map { keyValue =>
+        new ByteWrapper(keyValue._1.bytes)
+      }.asJava
+
+      try {
+        ti2PCClientOnExecutor.commitSecondaryKeys(keys, commitTs, options.commitBackOfferMS)
+      } catch {
+        case e: TiBatchWriteException =>
+          // ignored
+          logger.warn(s"commit secondary key error", e)
+      }
+
+      try {
+        ti2PCClientOnExecutor.close()
+      } catch {
+        case _: Throwable =>
+      }
+      logger.info("commitSecondaryKeys finish")
+    } else {
+      logger.info("skipping commit secondary key")
+    }
+  }
   // Start primary key ttl update
   private def startPrimaryKeyTTLUpdate(primaryKey: SerializableKey) {
     if (isTTLUpdate) {
